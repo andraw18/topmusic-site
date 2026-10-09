@@ -1,0 +1,71 @@
+name: Sync site from main repository
+
+on:
+  schedule:
+    - cron: '3/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+
+concurrency:
+  group: sync-upstream-site
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == 'wwoland/topmusic-site'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out domain repository
+        uses: actions/checkout@v4
+
+      - name: Check for a new site version
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha="$(git ls-remote https://github.com/andraw18/gavrishevskiy.git refs/heads/main | cut -f1)"
+          test -n "$sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          if [[ ! -f .upstream-sha || "$(cat .upstream-sha)" != "$sha" ]]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Copy the current site
+        if: steps.upstream.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --filter=blob:none --single-branch \
+            https://github.com/andraw18/gavrishevskiy.git "$RUNNER_TEMP/upstream"
+          rsync -a --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='CNAME' \
+            --exclude='.nojekyll' \
+            --exclude='.upstream-sha' \
+            --exclude='.gitignore' \
+            --exclude='README.md' \
+            --exclude='.DS_Store' \
+            --exclude='.serena/' \
+            --exclude='.vscode/' \
+            --exclude='*.zip' \
+            --filter='P /assets/media/uploads/***' \
+            "$RUNNER_TEMP/upstream/" ./
+          printf '%s\n' '${{ steps.upstream.outputs.sha }}' > .upstream-sha
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m "Sync site from andraw18/gavrishevskiy@${{ steps.upstream.outputs.sha }}"
+          git push origin HEAD:main
+
+      - name: Rebuild GitHub Pages
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${GITHUB_REPOSITORY}/pages/builds"
