@@ -33,6 +33,23 @@ jobs:
             echo 'changed=true' >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Keep the schedule active during quiet periods
+        if: steps.upstream.outputs.changed != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          now="$(date +%s)"
+          last="$(cat .sync-keepalive 2>/dev/null || echo 0)"
+          if (( now - last < 30 * 24 * 60 * 60 )); then
+            exit 0
+          fi
+          printf '%s\n' "$now" > .sync-keepalive
+          git add .sync-keepalive
+          git -c user.name='github-actions[bot]' \
+              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit -m 'Keep site sync schedule active'
+          git push origin HEAD:main
+
       - name: Copy the current site
         if: steps.upstream.outputs.changed == 'true'
         shell: bash
@@ -46,6 +63,7 @@ jobs:
             --exclude='CNAME' \
             --exclude='.nojekyll' \
             --exclude='.upstream-sha' \
+            --exclude='.sync-keepalive' \
             --exclude='.gitignore' \
             --exclude='README.md' \
             --exclude='.DS_Store' \
